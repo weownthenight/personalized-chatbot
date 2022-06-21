@@ -1,57 +1,30 @@
-"""
-code is from How to build a State-of-the-Art
-Conversational AI with Transfer learning
-(https://medium.com/huggingface/how-to-build-a-state-of-the-art-conversational-ai-with-transfer-learning-2d818ac26313)
-"""
-from transformers import OpenAIGPTDoubleHeadsModel, OpenAIGPTTokenizer
-from itertools import chain
+import logging
+from argparse import ArgumentParser
 
-# Let's define our contexts and special tokens
-persona = [["i", "like", "playing", "football", "."],
-           ["i", "am", "from", "NYC", "."]]
-history = [["hello", "how", "are", "you", "?"],
-           ["i", "am", "fine", "thanks", "."]]
-reply = ["great", "to", "hear"]
-bos, eos, speaker1, speaker2 = "<bos>", "<eos>", "<speaker1>", "<speaker2>"
+import torch
 
-
-def build_inputs(persona, history, reply):
-    # Build our sequence by adding delimiters and concatenating
-    # use list(chain(*persona)) to iterate every word in persona.
-    # sequence[0]: persona; sequence[1]: history[0]; sequence[2]: history[1];
-    # sequence[2]: reply[0]
-    sequence = [[bos] + list(chain(*persona))] + history + [reply + [eos]]
-    # add <speaker1> and <speaker2>
-    sequence = [sequenc[0]] + [[speaker2 if (len(sequence)-i) % 2 else speaker1] +
-                               s for i, s in enumerate(sequence[1:])]
-    # Build our word, segments and position inputs from sequence
-    # word tokens
-    words = list(chain(*sequence))
-    # segment tokens
-    segments = [speaker2 if i % 2 else speaker1 for i, s in enumerate(sequence) for _ in s]
-    # position tokens(absolute)
-    position = list(range(len(words)))
-    return words, segments, position, sequence
-
-
-words, segments, position, sequence = build_inputs(persona, history, reply)
-
-# >>>print(sequence) # Our inputs looks like this:
-# [['<bos>', 'i', 'like', 'playing', 'football', '.', 'i', 'am', 'from', 'NYC', '.'],
-# ['<speaker1>', 'hello', 'how', 'are', 'you', '?'],
-# ['<speaker2>', 'i', 'am', 'fine', 'thanks', '.'],
-# ['<speaker1>', 'great', 'to', 'hear', '<eos>']]
-
-# 'openai-gpt' is checkpoint
-model = OpenAIGPTDoubleHeadsModel.from_pretrained('openai-gpt')
-tokenizer = OpenAIGPTTokenizer.from_pretrained('openai-gpt')
-
-# add special tokens to vocabulary
+# define special tokens
 SPECIAL_TOKENS = ["<bos>", "<eos>", "<speaker1>", "<speaker2>", "<pad>"]
-tokenizer.set_special_tokens(SPECIAL_TOKENS)
-model.set_num_special_tokens(len(SPECIAL_TOKENS))
 
-# Tokenize words and segments embeddings:
-words = tokenizer.convert_tokens_to_ids(words)
-segments = tokenizer.convert_tokens_to_ids(segments)
+logger = logging.getLogger(__file__)
 
+def train():
+    parser = ArgumentParser()
+    parser.add_argument("--dataset_path", type=str, default="", help="Path or url of the dataset. If empty download from S3.")
+    parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
+    parser.add_argument("--model_checkpoint", type=str, default="openai-gpt", help="Path, url or short name of the model")
+    # 这里建模的时候可以改变思路，不要直接的history作为input之一去建模，而是将对方给出的人格信息（印象）进行更新保留，自己已透露的人格进行记录
+    # 可以先进行一个latent variable的embedding再送入transformer生成？
+    parser.add_argument("--max_history", type=int, default=2, help="Number of previous exchanges to keep in history")
+    parser.add_argument("--train_batch_size", type=int, default=4, help="Batch size for training")
+    parser.add_argument("--valid_batch_size", type=int, default=4, help="Batch size for validation")
+    # 这里default不是1e-5有点不理解？
+    parser.add_argument("--lr", type=float, default=6.25e-5,help="Learning rate")
+    parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
+    parser.add_argument("--mc_coef", type=float, default=1.0, help="Multiple-choice loss coefficient")
+    parser.add_argument("--n_epochs", type=int, default=3, help="Number of training epochs")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device (cuda or cpu)")
+    args = parser.parse_args()
+
+if __name__ == "__main__":
+    train()
