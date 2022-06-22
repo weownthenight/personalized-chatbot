@@ -26,6 +26,9 @@ def add_special_tokens_(model, tokenizer):
     if num_added_tokens > 0:
         model.resize_token_embeddings(new_num_tokens=orig_num_tokens + num_added_tokens)
 
+def get_data_loaders(args, tokenizer):
+    """Prepare the dataset for training and evaluation"""
+    personachat = get_dataset(tokenizer, args.dataset_path, args.dataset_cache)
 
 def train():
     parser = ArgumentParser()
@@ -60,6 +63,9 @@ def train():
     # Add special tokens if they are not already added
     add_special_tokens_(model, tokenizer)
     optimizer = AdamW(model.parameters(), lr=args.lr, correct_bias=True)
+
+    logger.info("Prepare datasets")
+    train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(args, tokenizer)
 
 if __name__ == "__main__":
     train()
