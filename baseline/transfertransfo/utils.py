@@ -2,6 +2,8 @@ from datetime import datetime
 import logging
 import os
 import json
+import tempfile
+import tarfile
 import socket
 
 import torch
@@ -10,9 +12,21 @@ from transformers import cached_path
 
 # TODO: use original txt file to convert to the json file format with the features we like
 PERSONACHAT_URL = "https://s3.amazonaws.com/datasets.huggingface.co/personachat/personachat_self_original.json"
+HF_FINETUNED_MODEL = "https://s3.amazonaws.com/models.huggingface.co/transfer-learning-chatbot/gpt_personachat_cache.tar.gz"
 
 logger = logging.getLogger(__file__)
 
+# used for evaluation
+def download_pretrained_model():
+    """Download and extract finetuned model from S3"""
+    resolved_archive_file = cached_path(HF_FINETUNED_MODEL)
+    # 创建临时文件夹
+    tempdir = tempfile.mkdtemp()
+    logger.info("extracting archive file {} to temp dir {}".format(resolved_archive_file, tempdir))
+    # 解压
+    with tarfile.open(resolved_archive_file, 'r:gz') as archive:
+        archive.extractall(tempdir)
+    return tempdir
 
 def get_dataset(tokenizer, dataset_path, dataset_cache):
     """Get tokenized PERSONACHAT dataset from S3 or cache."""
@@ -40,6 +54,12 @@ def get_dataset(tokenizer, dataset_path, dataset_cache):
         dataset = tokenize(dataset)
         torch.save(dataset, dataset_cache)
     return dataset
+
+#NOTE: used in convai_evaluation.py. Why we should define this class?
+class AttrDict(dict):
+    def __init__(self, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
 
 
 # After Python 3.5, you can assign the parameter's type, if 'model_name' is not a str, you will get a warning.
