@@ -201,12 +201,18 @@ def train():
         # move to cuda
         batch = tuple(input_tensor.to(args.device) for input_tensor in batch)
         input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
-        # In the latest transformers, the parameter "labels" stands for "lm_labels"
-        outputs = model(
+        # for previous transformer version, model returns a tuple
+        (lm_loss), (mc_loss), *_ =  model(
             input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
             mc_labels=mc_labels, labels=lm_labels
         )
-        loss = (outputs.loss * args.lm_coef + outputs.mc_loss * args.mc_coef) / args.gradient_accumulation_steps
+        # In the latest transformers, the parameter "labels" stands for "lm_labels"
+        #outputs = model(
+        #    input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
+        #    mc_labels=mc_labels, labels=lm_labels
+        #)
+        loss = (lm_loss * args.lm_coef + mc_loss * args.mc_coef) / args.gradient_accumulation_steps
+        #loss = (outputs.loss * args.lm_coef + outputs.mc_loss * args.mc_coef) / args.gradient_accumulation_steps
         loss.backward()
         # NOTE: why we should do this? The strength is?
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm)
@@ -226,12 +232,18 @@ def train():
             input_ids, mc_token_ids, lm_labels, mc_labels, token_type_ids = batch
             logger.info(tokenizer.decode(input_ids[0, -1, :].tolist()))
             # if we don't send labels to model, it doesn't return losses
-            outputs = model(
+            lm_logits, mc_logits, *_ = model(
                 input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
             )
-            lm_logits_flat_shifted = outputs.logits[..., :-1, :].contiguous().view(-1, outputs.logits.size(-1))
+            lm_logits_flat_shifted = lm_logits[..., :-1, :].contiguous().view(-1, lm_logits.size(-1))
             lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
-            return (lm_logits_flat_shifted, outputs.mc_logits), (lm_labels_flat_shifted,mc_labels)
+            #outputs = model(
+            #    input_ids, token_type_ids=token_type_ids, mc_token_ids=mc_token_ids,
+            #)
+            #lm_logits_flat_shifted = outputs.logits[..., :-1, :].contiguous().view(-1, outputs.logits.size(-1))
+            #lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
+            #return (lm_logits_flat_shifted, outputs.mc_logits), (lm_labels_flat_shifted,mc_labels)
+            return (lm_logits_flat_shifted, mc_logits), (lm_labels_flat_shifted, mc_labels)
 
     evaluator = Engine(inference)
 
