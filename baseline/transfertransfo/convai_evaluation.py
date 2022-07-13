@@ -1,11 +1,20 @@
+# -*- coding: utf-8 -*-
+"""
+TODO: ParlAI因为版本问题，很多都不兼容，如果不需要用RL的话，感觉不用ParlAI
+更好，这些评测指标可能需要重新写一遍，除了hit@1,hit@5,perplexity我还想算一下BLEU，
+F1完全不重要，没有必要算吧。
+convai2archive对应ParlAI 0.1.0，由于服务器的问题，ParlAI最多更新到0.9.0, transformers版本也不能太新...
+"""
 import random
 import logging
 from pprint import pformat
 from collections import defaultdict
 # partial用于固定参数
 from functools import partial
+from tqdm import trange
 
 import torch
+import torch.nn.functional as F
 from parlai.core.agents import Agent
 # NOTE: I have to learn parlai.scripts.eval_model
 from parlai.scripts.eval_model import setup_args as base_setup_args
@@ -19,6 +28,7 @@ from transformers import (OpenAIGPTDoubleHeadsModel, OpenAIGPTLMHeadModel, OpenA
 
 from train import build_input_from_segments, pad_dataset, add_special_tokens_, SPECIAL_TOKENS
 from utils import download_pretrained_model, AttrDict
+from interact import sample_sequence
 
 # NOTE: Have to learn ParLAI agent
 class TransformerAgent(Agent):
@@ -44,6 +54,7 @@ class TransformerAgent(Agent):
 
         # to keep most commands identical to the interact.py script
         args = AttrDict(opt)
+        self.args = args
 
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__file__)
@@ -68,7 +79,7 @@ class TransformerAgent(Agent):
                 model_class = OpenAIGPTDoubleHeadsModel if self.args.eval_type == "hits@1" else OpenAIGPTLMHeadModel
 
             self.model_checkpoint = model_class.from_pretrained(args.model_checkpoint)
-            self.model_checkpoint.tp(args.device)
+            self.model_checkpoint.to(args.device)
 
             self.logger.info("Build BPE prefix dictionary")
             convai_dict = build_dict()
@@ -89,7 +100,6 @@ class TransformerAgent(Agent):
 
         self.reset()
 
-    # NOTE: observation is a dict?
     def observe(self, observation):
         if self.episode_done:
             self.reset()
@@ -117,7 +127,7 @@ class TransformerAgent(Agent):
         candidates = []
         if 'label_candidates' in observation:
             for candidate in observation['label_candidates']:
-                candidates.append((self.tokenizer.encode(candidates), candidate))
+                candidates.append((self.tokenizer.encode(candidate), candidate))
         self.candidates = candidates
 
         self.episode_done = observation['episode_done']
@@ -132,7 +142,7 @@ class TransformerAgent(Agent):
             for candidate, _ in self.candidates:
                 instance = build_input_from_segments(self.persona, self.history, candidate, self.tokenizer)
                 for input_name, input_array in instance.items():
-                    instance[input_name].append(input_array)
+                    instances[input_name].append(input_array)
 
             inputs = pad_dataset(instances, padding=self.special_tokens_ids[-1])
 
@@ -157,7 +167,71 @@ class TransformerAgent(Agent):
         else:
             # We are in interactive of f1 evaluation mode => just sample
             with torch.no_grad():
-                out_ids = sample_sequence()
+                out_ids = sample_sequence(self.persona, self.history, self.tokenizer, self.model_checkpoint, self.args)
+            out_text = self.tokenizer.decode(out_ids, skip_special_tokens=True,
+                                             clean_up_tokenization_spaces=(self.args.eval_type != 'f1'))
+            reply = {'text': out_text}
+
+        return reply
+
+    # next_word_probability is used to predict perplexity
+    def next_word_probability(self, partial_out):
+        """Return probability distribution over next words given an input and
+        partial true output. This is used to calculate the per-word perplexity.
+        """
+        partial_out_ids = self.tokenizer.encode(' '.join(partial_out))
+        instance = build_input_from_segments(self.persona, self.history, partial_out_ids,
+                                            self.tokenizer, with_eos=False)
+        input_ids = torch.tensor(instance["input_ids"], device=self.args.device).unsqueeze(0)
+        token_type_ids = torch.tensor(instance["token_type_ids"], device=self.args.device).unsqueeze(0)
+
+        with torch.no_grad():
+            logits = self.model_checkpoint(input_ids, token_type_ids=token_type_ids)
+
+        # for gpt2 and maybe others
+        if isinstance(logits, tuple):
+            logits = logits[0]
+        probs = F.softmax(logits[0, -1], dim=0)
+
+        dist = {}
+        for prefix_id, words in self.prefix2words.items():
+            for word, ratio in words.items():
+                dist[word] = probs[prefix_id].item() * ratio
+        return dist
+
+
+    # NOTE: why you count words?
+    def get_prefix2words(self, convai_dict, smoothing_freq=5):
+        """ map BPE-prefix => dict(full_words beginning with BPE-prefix, associated words_counts"""
+        prefix2words = defaultdict(dict)
+        # trange short for tqdm range
+        for i in trange(len(convai_dict)):
+            word = convai_dict[i]
+            freq = convai_dict.freq[word] + smoothing_freq
+            bpe_tokens = self.tokenizer.bpe(word).split(' ')
+            prefix_id = self.tokenizer.convert_tokens_to_ids(bpe_tokens[0])
+            prefix2words[prefix_id].update(dict([(word, freq)]))
+
+        for prefix_id, words in prefix2words.items():
+            total_counts = sum(words.values())
+            prefix2words[prefix_id] = dict((word, count/total_counts) for word, count in words.items())
+
+        return prefix2words
+
+    def share(self):
+        shared = super(TransformerAgent, self).share()
+        shared['tokenizer'] = self.tokenizer
+        shared['model'] = self.model_checkpoint
+        shared['prefix2words'] = self.prefix2words
+        return shared
+
+    def reset(self):
+        self.persona = []
+        self.history = []
+        self.labels = []
+        self.candidates = []
+        self.episode_done = True
+        self.observation = None
 
 if __name__ == '__main__':
     parser = base_setup_args(None)
@@ -182,7 +256,6 @@ if __name__ == '__main__':
     setup_args.set_params(
         model='convai_evaluation:TransformerAgent')
     opt = setup_args.parse_args(print_args=False)
-
     # use ParLAI scripts to evaluate the model, all we have to do is to define the agent
     eval_fct(opt)
 
