@@ -10,8 +10,8 @@ Preprocessing:
     - everything lowercase
 """
 EXAMPLE_ENTRY = {
-    "personality": ["i like to remodel homes .", "i like to go hunting .",
-                    "i like to shoot a bow .", "my favorite holiday is halloween ."],
+    "personality": ["i like to remodel homes.", "i like to go hunting.",
+                    "i like to shoot a bow.", "my favorite holiday is halloween."],
     "utterances": [
         {"candidates": [
             "my mom was single with 3 boys , so we never left the projects .",

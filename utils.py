@@ -55,6 +55,9 @@ def get_dataset(tokenizer, dataset_path, dataset_cache):
         torch.save(dataset, dataset_cache)
     return dataset
 
+
+
+
 #NOTE: used in convai_evaluation.py. Why we should define this class?
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):

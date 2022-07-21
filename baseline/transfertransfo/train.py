@@ -192,7 +192,7 @@ def train():
         model = DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
 
     logger.info("Prepare datasets")
-    train_loader, val_loader, train_sampler, valid_sampler = get_data_loaders(args, tokenizer)
+    train_loader, val_loader, train_sampler, valid_sampler = (args, tokenizer)
 
     # Training function and trainer
     def update(engine, batch):
